@@ -1,10 +1,10 @@
 [build]
-  command   = "cd zentara-project && npm install && npm run build"
+  command   = "cd zentara-project && npm install && npm run build && cd ../backend && npm install"
   publish   = "zentara-project/dist"
   functions = "netlify/functions"
 
 [functions]
-  node_bundler = "esbuild"
+  node_bundler = "nft"
 
 # Backend API → Netlify Function
 [[redirects]]
