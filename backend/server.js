@@ -16,8 +16,21 @@ const adminRoutes    = require('./routes/admin');
 const app  = express();
 const PORT = process.env.PORT || 5000;
 
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'http://localhost:3000',
+  'http://localhost:5173',
+].filter(Boolean);
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: (origin, cb) => {
+    // Allow same-origin (Netlify Functions) and listed origins
+    if (!origin || allowedOrigins.some(o => origin.startsWith(o)) || origin.includes('.netlify.app')) {
+      cb(null, true);
+    } else {
+      cb(new Error('CORS not allowed'));
+    }
+  },
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -38,4 +51,9 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(PORT, () => console.log(`🟢 Zentara API running on http://localhost:${PORT}`));
+// Local dev only — Netlify Functions จะ import app โดยตรงแทน listen
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`🟢 Zentara API running on http://localhost:${PORT}`));
+}
+
+module.exports = app;

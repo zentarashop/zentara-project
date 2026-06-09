@@ -1,0 +1,23 @@
+[build]
+  command   = "cd zentara-project && npm install && npm run build"
+  publish   = "zentara-project/dist"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Backend API → Netlify Function
+[[redirects]]
+  from   = "/api/*"
+  to     = "/.netlify/functions/api/:splat"
+  status = 200
+  force  = true
+
+# SPA routing — ทุก path ส่ง index.html
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
+
+[build.environment]
+  NODE_VERSION = "20"
