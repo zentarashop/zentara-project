@@ -114,4 +114,52 @@ router.post('/refresh-token', async (req, res) => {
   }
 });
 
+// GET /api/instagram/dm — สรุป DM ใหม่สำหรับโอเพิล
+router.get('/dm', async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 20, 50);
+    const data = await igFetch(
+      `${IG_API}/${igId()}/conversations?fields=id,updated_time,messages{message,from,created_time}&limit=${limit}&access_token=${token()}`
+    );
+
+    const convos = (data.data || []).map(convo => {
+      const msgs   = convo.messages?.data || [];
+      const latest = msgs[0] || {};
+      const isFromCustomer = latest.from?.id !== igId();
+      return {
+        conversation_id: convo.id,
+        updated_time:    convo.updated_time,
+        latest_message:  latest.message || '',
+        from:            latest.from?.username || latest.from?.name || 'unknown',
+        from_id:         latest.from?.id,
+        is_unread:       isFromCustomer,
+        message_count:   msgs.length,
+      };
+    });
+
+    const unread = convos.filter(c => c.is_unread);
+
+    res.json({
+      total_conversations: convos.length,
+      unread_count:        unread.length,
+      unread:              unread,
+      all:                 convos,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/instagram/dm/:conversation_id/reply — draft reply (ไม่ auto-send)
+router.get('/dm/:conversation_id/messages', async (req, res) => {
+  try {
+    const data = await igFetch(
+      `${IG_API}/${req.params.conversation_id}/messages?fields=message,from,created_time&access_token=${token()}`
+    );
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
