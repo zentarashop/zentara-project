@@ -333,6 +333,26 @@ export default function AdminPage() {
     <div className="page admin-page">
       <div className="container">
 
+        {/* ── Global Confirm Delete Dialog ── */}
+        {pendingDelete && (
+          <div className="confirm-overlay" onClick={() => setPendingDelete(null)}>
+            <div className="confirm-box card" onClick={e => e.stopPropagation()}>
+              <p className="fw-bold" style={{ marginBottom: 8 }}>
+                ยืนยันลบ{pendingDelete.type === 'review' ? 'รีวิว' : 'โค้ดส่วนลด'}?
+              </p>
+              <p className="text-muted" style={{ fontSize: 13, marginBottom: 16 }}>การกระทำนี้ไม่สามารถยกเลิกได้</p>
+              <div className="flex gap-8">
+                <button className="btn btn-danger btn-sm" onClick={() => {
+                  if (pendingDelete.type === 'review') deleteReview(pendingDelete.id);
+                  else deleteDiscount(pendingDelete.id);
+                  setPendingDelete(null);
+                }}>ลบเลย</button>
+                <button className="btn btn-outline btn-sm" onClick={() => setPendingDelete(null)}>ยกเลิก</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Header */}
         <div className="admin-header animate-in">
           <div>
@@ -692,24 +712,6 @@ export default function AdminPage() {
         {/* ══════════════════════════════ REVIEWS ══════════════════════════════ */}
         {tab === 'reviews' && (
           <div className="admin-section animate-in">
-            {pendingDelete && (
-              <div className="confirm-overlay" onClick={() => setPendingDelete(null)}>
-                <div className="confirm-box card" onClick={e => e.stopPropagation()}>
-                  <p className="fw-bold" style={{ marginBottom: 8 }}>
-                    ยืนยันลบ{pendingDelete.type === 'review' ? 'รีวิว' : 'โค้ดส่วนลด'}?
-                  </p>
-                  <p className="text-muted" style={{ fontSize: 13, marginBottom: 16 }}>การกระทำนี้ไม่สามารถยกเลิกได้</p>
-                  <div className="flex gap-8">
-                    <button className="btn btn-danger btn-sm" onClick={() => {
-                      if (pendingDelete.type === 'review') deleteReview(pendingDelete.id);
-                      else deleteDiscount(pendingDelete.id);
-                      setPendingDelete(null);
-                    }}>ลบเลย</button>
-                    <button className="btn btn-outline btn-sm" onClick={() => setPendingDelete(null)}>ยกเลิก</button>
-                  </div>
-                </div>
-              </div>
-            )}
             <div className="reviews-admin-list">
               {reviews.map(r => (
                 <div key={r.id} className={`review-admin-card card${!r.approved ? ' pending' : ''}`}>
