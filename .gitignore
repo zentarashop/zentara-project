@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment variables (NEVER commit these)
+.env
+.env.local
+.env.production
+**/.env
+**/.env.local
+
+# Build output
+dist/
+build/
+.vite/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Backup & temp files
+backup/2026-*/*.json
+*.zip
+*.xlsx
+*.docx
+Temp*.json
+zi*/
+
+# Upload/slip files (Supabase handles this)
+backend/uploads/
+
+# Claude internal
+.claude/skills/
+.claude/memory/

@@ -1,0 +1,146 @@
+.orders-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.order-card { overflow: hidden; }
+
+.order-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  width: 100%;
+  gap: 16px;
+  transition: background var(--transition);
+}
+.order-card-header:hover { background: var(--bg-hover); }
+
+.order-card-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.order-card-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* Body */
+.order-card-body {
+  padding: 0 24px 24px;
+  border-top: 1px solid var(--border);
+  margin-top: 0;
+}
+
+/* Progress */
+.order-progress {
+  display: flex;
+  align-items: flex-start;
+  padding: 24px 0;
+  overflow-x: auto;
+}
+
+.progress-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  flex: 1;
+  min-width: 80px;
+}
+
+.progress-circle {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--border-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: var(--text-dim);
+  background: var(--bg-card);
+  position: relative;
+  z-index: 1;
+  transition: all 0.3s;
+}
+.progress-circle.active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.progress-circle.done {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #000;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.progress-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  text-align: center;
+  white-space: nowrap;
+  transition: color 0.3s;
+}
+.progress-label.active { color: var(--accent); }
+
+.progress-line {
+  position: absolute;
+  top: 20px;
+  left: calc(50% + 20px);
+  right: calc(-50% + 20px);
+  height: 1px;
+  background: var(--border);
+  z-index: 0;
+  transition: background 0.3s;
+}
+.progress-line.done { background: var(--accent); opacity: 0.5; }
+
+/* Items */
+.order-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.order-item-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Slip */
+.slip-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: var(--accent-dim);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.slip-status-pending {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: rgba(255,200,0,0.06);
+  border-radius: var(--radius-sm);
+}
+
+@media (max-width: 600px) {
+  .order-card-right { flex-direction: column; align-items: flex-end; gap: 4px; }
+  .progress-label { display: none; }
+}

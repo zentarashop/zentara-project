@@ -1,0 +1,16 @@
+export const IMGS = {
+  hero_bg:       '/imgs/hero_bg.jpg',
+  angle_product: '/imgs/angle_product.jpg',
+  angle_size:    '/imgs/angle_size.jpg',
+  luv_product:   '/imgs/luv_product.jpg',
+  luv_size:      '/imgs/luv_size.jpg',
+  fake_product:  '/imgs/fake_product.jpg',
+  fake_size:     '/imgs/fake_size.jpg',
+  lunar_product: '/imgs/lunar_product.jpg',
+  lunar_size:    '/imgs/lunar_size.jpg',
+  hoodie_product:'/imgs/hoodie_product.jpg',
+  hoodie_size:   '/imgs/hoodie_size.jpg',
+  wear_truth:    '/imgs/wear_truth.jpg',
+  tshirt_size:   '/imgs/luv_size.jpg',
+  logo:          '/imgs/logo_placeholder.jpg',
+};
