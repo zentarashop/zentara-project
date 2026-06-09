@@ -13,6 +13,7 @@ const discountRoutes = require('./routes/discounts');
 const reviewRoutes   = require('./routes/reviews');
 const adminRoutes       = require('./routes/admin');
 const instagramRoutes   = require('./routes/instagram');
+const teamRoutes        = require('./routes/team');
 
 const app  = express();
 const PORT = process.env.PORT || 5000;
@@ -44,6 +45,7 @@ app.use('/api/discounts', discountRoutes);
 app.use('/api/reviews',   reviewRoutes);
 app.use('/api/admin',     adminRoutes);
 app.use('/api/instagram', limiter, instagramRoutes);
+app.use('/api/team',      limiter, teamRoutes);
 
 app.get('/api/health', (_, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
