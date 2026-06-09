@@ -1,9 +1,10 @@
 const router = require('express').Router();
 const { supabase } = require('../db/supabase');
-const { requireAdmin } = require('../middleware/auth');
+const { authenticate, requireAdmin } = require('../middleware/auth');
+const adminAuth = [authenticate, requireAdmin];
 
 // GET /api/discounts — admin: ดูโค้ดทั้งหมด
-router.get('/', requireAdmin, async (req, res) => {
+router.get('/', adminAuth, async (req, res) => {
   const { data, error } = await supabase
     .from('discount_codes')
     .select('*')
@@ -13,7 +14,7 @@ router.get('/', requireAdmin, async (req, res) => {
 });
 
 // POST /api/discounts — admin: สร้างโค้ดใหม่
-router.post('/', requireAdmin, async (req, res) => {
+router.post('/', adminAuth, async (req, res) => {
   const { code, type, value, max_uses } = req.body;
   if (!code || !type) return res.status(400).json({ error: 'กรุณากรอกข้อมูลให้ครบ' });
 
@@ -35,7 +36,7 @@ router.post('/', requireAdmin, async (req, res) => {
 });
 
 // PATCH /api/discounts/:id — admin: toggle active
-router.patch('/:id', requireAdmin, async (req, res) => {
+router.patch('/:id', adminAuth, async (req, res) => {
   const { active } = req.body;
   const { data, error } = await supabase
     .from('discount_codes')
@@ -48,7 +49,7 @@ router.patch('/:id', requireAdmin, async (req, res) => {
 });
 
 // DELETE /api/discounts/:id — admin: ลบโค้ด
-router.delete('/:id', requireAdmin, async (req, res) => {
+router.delete('/:id', adminAuth, async (req, res) => {
   const { error } = await supabase
     .from('discount_codes')
     .delete()
