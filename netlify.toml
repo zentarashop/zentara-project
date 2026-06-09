@@ -1,5 +1,5 @@
 [build]
-  command   = "cd zentara-project && npm install && npm run build && cd ../backend && npm install"
+  command   = "npm install && cd zentara-project && npm install && npm run build"
   publish   = "zentara-project/dist"
   functions = "netlify/functions"
 
