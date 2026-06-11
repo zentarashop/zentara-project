@@ -1,0 +1,25 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "zentara-frontend",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["node_modules/vite/bin/vite.js"],
+      "cwd": "zentara-project",
+      "port": 3000
+    },
+    {
+      "name": "zentara-team",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "zentara-team", "-l", "4321"],
+      "port": 4321
+    },
+    {
+      "name": "zentara-backend",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.js"],
+      "cwd": "backend",
+      "port": 5000
+    }
+  ]
+}

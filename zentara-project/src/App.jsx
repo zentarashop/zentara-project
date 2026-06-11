@@ -14,6 +14,8 @@ import SuccessPage        from './pages/SuccessPage';
 import TrackingPage       from './pages/TrackingPage';
 import MemberPage         from './pages/MemberPage';
 import AdminPage          from './pages/AdminPage';
+import TermsPage          from './pages/TermsPage';
+import PrivacyPage        from './pages/PrivacyPage';
 import NotFoundPage       from './pages/NotFoundPage';
 
 export default function App() {
@@ -33,6 +35,8 @@ export default function App() {
               <Route path="/track"         element={<TrackingPage />} />
               <Route path="/member"        element={<MemberPage />}   />
               <Route path="/admin"         element={<AdminPage />}    />
+              <Route path="/terms"         element={<TermsPage />}    />
+              <Route path="/privacy"       element={<PrivacyPage />}  />
               <Route path="*"              element={<NotFoundPage />} />
             </Routes>
             <Footer />
