@@ -16,6 +16,7 @@ import MemberPage         from './pages/MemberPage';
 import AdminPage          from './pages/AdminPage';
 import TermsPage          from './pages/TermsPage';
 import PrivacyPage        from './pages/PrivacyPage';
+import TikTokCallbackPage from './pages/TikTokCallbackPage';
 import NotFoundPage       from './pages/NotFoundPage';
 
 export default function App() {
@@ -37,6 +38,7 @@ export default function App() {
               <Route path="/admin"         element={<AdminPage />}    />
               <Route path="/terms"         element={<TermsPage />}    />
               <Route path="/privacy"       element={<PrivacyPage />}  />
+              <Route path="/tiktok-callback" element={<TikTokCallbackPage />} />
               <Route path="*"              element={<NotFoundPage />} />
             </Routes>
             <Footer />
