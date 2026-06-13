@@ -35,7 +35,7 @@ router.get('/media', async (req, res) => {
 router.get('/media/:id/insights', async (req, res) => {
   try {
     const data = await igFetch(
-      `${IG_API}/${req.params.id}/insights?metric=engagement,impressions,reach,saved&access_token=${token()}`
+      `${IG_API}/${req.params.id}/insights?metric=total_interactions,reach,saved&access_token=${token()}`
     );
     res.json(data);
   } catch (err) {
@@ -55,10 +55,11 @@ router.get('/performance', async (req, res) => {
       (mediaData.data || []).map(async (post) => {
         try {
           const insight = await igFetch(
-            `${IG_API}/${post.id}/insights?metric=engagement,impressions,reach,saved&access_token=${token()}`
+            `${IG_API}/${post.id}/insights?metric=total_interactions,reach,saved&access_token=${token()}`
           );
           const metrics = {};
           (insight.data || []).forEach(m => { metrics[m.name] = m.values?.[0]?.value ?? 0; });
+          if (metrics.total_interactions !== undefined) metrics.engagement = metrics.total_interactions;
           return { ...post, ...metrics };
         } catch {
           return post;
