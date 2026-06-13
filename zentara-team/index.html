@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZENTARA Command Center</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; width: 100%; }
+    body { font-family: 'Outfit', sans-serif; background: #0a0a12; color: #e0e0e8; overflow: hidden; }
+    body::before {
+      content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+      background-image:
+        linear-gradient(rgba(45,255,122,0.016) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(45,255,122,0.016) 1px, transparent 1px);
+      background-size: 48px 48px;
+    }
+    #root { position: relative; z-index: 1; }
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(45,255,122,0.2); border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(45,255,122,0.4); }
+    button { font-family: inherit; }
+    @keyframes fadeUp { from { transform:translateY(10px); } to { transform:translateY(0); } }
+    @keyframes blink  { 0%,100% { opacity:1; } 50% { opacity:0; } }
+    @keyframes catWalk    { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
+    @keyframes catIdleFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-7px)} }
+    @keyframes emojiFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-3px)} }
+    @keyframes ping { 0%{transform:scale(1);opacity:0.9} 70%,100%{transform:scale(2.6);opacity:0} }
+    .cat-walk { animation: catWalk 0.42s ease-in-out infinite; display:block; line-height:1; }
+    .cat-idle { animation: catIdleFloat 2.5s ease-in-out infinite; display:block; }
+    .cat-ping { animation: ping 2s ease-out infinite; }
+    @keyframes drainBar { from { width:100%; } to { width:0%; } }
+    @keyframes pulseGlow { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+    .view-in { animation: fadeUp 0.25s ease-out; }
+    .blink    { animation: blink 1.2s infinite; }
+    .pulse    { animation: pulseGlow 2s infinite; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script src="zentara-data.js"></script>
+<script src="zentara-api.js"></script>
+
+<!-- ═══════════════════════════════════════════════
+     SHARED COMPONENTS: Card · TopBar · Sidebar
+     DecisionQueue · ActivityFeed · TodaySchedule
+     ═══════════════════════════════════════════════ -->
+<script type="text/babel">
+const { useState, useEffect } = React;
+const C = window.ZC;
+const D = window.ZD;
+
+/* ── Live team data (polling) ─────────────────────────────────
+   Single shared poller (no matter how many components subscribe)
+   so we stay well under the backend rate limit. Falls back to
+   mock data (zentara-data.js) until the first successful fetch. */
+const TeamDataStore = (() => {
+  let state = { decisionQueue: D.decisionQueue, activityFeed: D.activityFeed, latestByAgent: {} };
+  let subscribers = [];
+  let started = false;
+  const poll = () => {
+    window.zentaraFetchTeamTasks()
+      .then(data => { state = data; subscribers.forEach(fn => fn(state)); })
+      .catch(() => {});
+  };
+  const start = () => {
+    if (started) return;
+    started = true;
+    poll();
+    setInterval(poll, 12000);
+  };
+  return {
+    getState: () => state,
+    subscribe: (fn) => { subscribers.push(fn); start(); return () => { subscribers = subscribers.filter(s => s !== fn); }; },
+  };
+})();
+
+function useTeamData() {
+  const [state, setState] = useState(TeamDataStore.getState());
+  useEffect(() => TeamDataStore.subscribe(setState), []);
+  return state;
+}
+
+/* ── Live business data (orders / stock / IG / DMs) ───────────
+   Admin-protected endpoints (orders, stock, KPI stats) only poll
+   once an admin JWT is present (see zentara-api.js). Instagram
+   endpoints are public and poll regardless. Falls back to mock
+   data per-field until each fetch first succeeds. */
+const LiveDataStore = (() => {
+  let state = {
+    stats: null,
+    orders: D.orders, ordersSummary: null,
+    stockAlerts: D.stockAlerts,
+    performance: D.performance,
+    dmInbox: D.dmInbox,
+    tsukiInbox: D.tsukiInbox,
+    collections: D.collections,
+  };
+  let subscribers = [];
+  let started = false;
+  const emit = () => subscribers.forEach(fn => fn(state));
+  const pollAuth = () => {
+    if (!window.zentaraGetAuth()) return;
+    window.zentaraFetchAdminStats().then(stats => { state = {...state, stats}; emit(); }).catch(() => {});
+    window.zentaraFetchOrders().then(({orders, summary}) => { state = {...state, orders, ordersSummary: summary}; emit(); }).catch(() => {});
+    window.zentaraFetchStockAlerts().then(stockAlerts => { state = {...state, stockAlerts}; emit(); }).catch(() => {});
+  };
+  const pollPublic = () => {
+    window.zentaraFetchPerformance().then(performance => { state = {...state, performance}; emit(); }).catch(() => {});
+    window.zentaraFetchDmInbox().then(dmInbox => { state = {...state, dmInbox}; emit(); }).catch(() => {});
+    window.zentaraFetchTsukiInbox().then(tsukiInbox => { state = {...state, tsukiInbox}; emit(); }).catch(() => {});
+    window.zentaraFetchCollections().then(collections => { state = {...state, collections}; emit(); }).catch(() => {});
+  };
+  const pollAll = () => { pollAuth(); pollPublic(); };
+  const start = () => {
+    if (started) return;
+    started = true;
+    pollAll();
+    setInterval(pollAll, 15000);
+  };
+  return {
+    getState: () => state,
+    subscribe: (fn) => { subscribers.push(fn); start(); return () => { subscribers = subscribers.filter(s => s !== fn); }; },
+    refresh: pollAll,
+  };
+})();
+
+function useLiveData() {
+  const [state, setState] = useState(LiveDataStore.getState());
+  useEffect(() => LiveDataStore.subscribe(setState), []);
+  return state;
+}
+
+/* ── Card ──────────────────────────────────────────────────── */
+function Card({ title, accent, badge, children, style: sx }) {
+  const ac = accent || C.green;
+  return (
+    <div style={{ background:C.card, borderRadius:12, border:`1px solid ${ac}22`, overflow:'hidden', ...sx }}>
+      {title && (
+        <div style={{ padding:'11px 16px', borderBottom:`1px solid ${ac}18`, display:'flex', alignItems:'center', justifyContent:'space-between', background:`${ac}07` }}>
+          <span style={{ fontSize:10, fontFamily:'JetBrains Mono,monospace', fontWeight:600, color:ac, letterSpacing:'0.12em', textTransform:'uppercase' }}>{title}</span>
+          {badge && <span style={{ fontSize:10, fontFamily:'JetBrains Mono,monospace', color:C.dim, background:`${ac}14`, border:`1px solid ${ac}28`, borderRadius:4, padding:'1px 8px' }}>{badge}</span>}
+        </div>
+      )}
+      <div style={{ padding:16 }}>{children}</div>
+    </div>
+  );
+}
+
+/* ── Badge ─────────────────────────────────────────────────── */
+function Badge({ label, color }) {
+  const col = color || C.muted;
+  return (
+    <span style={{ fontSize:9, fontFamily:'JetBrains Mono,monospace', fontWeight:700, letterSpacing:'0.08em', color:col, background:`${col}16`, border:`1px solid ${col}35`, borderRadius:4, padding:'2px 7px', flexShrink:0, whiteSpace:'nowrap' }}>
+      {String(label).toUpperCase()}
+    </span>
+  );
+}
+
+/* ── TopBar ────────────────────────────────────────────────── */
+function TopBar({ urgentCount, user, onLogout }) {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
+  const dateStr = now.toLocaleDateString('th-TH', { weekday:'long', day:'numeric', month:'short', year:'numeric' });
+  const timeStr = now.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false });
+
+  return (
+    <header style={{ height:56, display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 22px', background:'#090a16', borderBottom:'1px solid rgba(255,255,255,0.06)', flexShrink:0, zIndex:100 }}>
+      {/* Logo */}
+      <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+        <div style={{ width:30, height:30, borderRadius:7, background:`${C.green}18`, border:`1.5px solid ${C.green}80`, display:'flex', alignItems:'center', justifyContent:'center', boxShadow:`0 0 14px ${C.green}44` }}>
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <polygon points="7,1 13,4.5 13,9.5 7,13 1,9.5 1,4.5" stroke={C.green} strokeWidth="1.5" fill="none"/>
+            <polygon points="7,4.5 10,6.2 10,8.2 7,9.8 4,8.2 4,6.2" fill={C.green} opacity="0.8"/>
+          </svg>
+        </div>
+        <div style={{ display:'flex', alignItems:'baseline', gap:9 }}>
+          <span style={{ fontFamily:'JetBrains Mono,monospace', fontWeight:700, fontSize:15, letterSpacing:'0.12em', color:C.text }}>ZENTARA</span>
+          <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:10, color:C.muted, letterSpacing:'0.14em' }}>COMMAND CENTER</span>
+        </div>
+      </div>
+
+      {/* Clock */}
+      <div style={{ display:'flex', alignItems:'center', gap:18 }}>
+        <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:11, color:C.muted }}>{dateStr}</span>
+        <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:17, fontWeight:700, color:C.green, letterSpacing:'0.1em', textShadow:`0 0 14px ${C.green}99` }}>{timeStr}</div>
+      </div>
+
+      {/* Alerts */}
+      <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+        {urgentCount > 0 && (
+          <div className="pulse" style={{ display:'flex', alignItems:'center', gap:6, borderRadius:20, background:`${C.red}18`, border:`1px solid ${C.red}60`, padding:'4px 14px', boxShadow:`0 0 12px ${C.red}33` }}>
+            <div className="blink" style={{ width:5, height:5, borderRadius:'50%', background:C.red, boxShadow:`0 0 6px ${C.red}` }}></div>
+            <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:10, fontWeight:700, color:C.red, letterSpacing:'0.1em' }}>{urgentCount} URGENT</span>
+          </div>
+        )}
+        <div style={{ width:32, height:32, borderRadius:8, background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize:14 }}>🔔</div>
+        {user && (
+          <div style={{ display:'flex', alignItems:'center', gap:8, paddingLeft:10, borderLeft:'1px solid rgba(255,255,255,0.08)' }}>
+            <span style={{ fontSize:11, fontFamily:'JetBrains Mono,monospace', color:C.muted, maxWidth:140, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{user.name || user.email}</span>
+            <button onClick={onLogout} title="ออกจากระบบ" style={{ width:32, height:32, borderRadius:8, background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize:13, color:C.muted }}>⏻</button>
+          </div>
+        )}
+      </div>
+    </header>
+  );
+}
+
+/* ── Sidebar ───────────────────────────────────────────────── */
+function Sidebar({ activeView, onNavigate }) {
+  const nav = [
+    { id:'gm',      emoji:'👑', label:'GM Overview', sub:'Command',       color:C.green  },
+    { id:'tsuki',   emoji:'🐱', label:'Tsuki',        sub:'Chief of Staff',color:C.pink   },
+    { id:'magrace', emoji:'🎨', label:'Magrace',      sub:'Marketing',     color:C.purple },
+    { id:'poduch',  emoji:'🧵', label:'Poduch',       sub:'Product',       color:C.blue   },
+    { id:'opal',    emoji:'📦', label:'Opal',         sub:'Operations',    color:C.orange },
+  ];
+  return (
+    <nav style={{ width:210, background:'#090a16', borderRight:'1px solid rgba(255,255,255,0.06)', display:'flex', flexDirection:'column', flexShrink:0, padding:'12px 0' }}>
+      <div style={{ padding:'2px 16px 12px' }}>
+        <span style={{ fontSize:9, fontFamily:'JetBrains Mono,monospace', color:C.dim, letterSpacing:'0.22em' }}>DEPARTMENTS</span>
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', gap:2, padding:'0 8px', flex:1 }}>
+        {nav.map(item => {
+          const on = activeView === item.id;
+          return (
+            <button key={item.id} onClick={() => onNavigate(item.id)} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 10px', borderRadius:8, border:'none', cursor:'pointer', textAlign:'left', background:on?`${item.color}14`:'transparent', borderLeft:`2.5px solid ${on?item.color:'transparent'}`, boxShadow:on?`0 0 16px ${item.color}18`:'none', transition:'all 0.18s ease' }}>
+              <div style={{ width:34, height:34, borderRadius:9, flexShrink:0, background:on?`${item.color}22`:'rgba(255,255,255,0.05)', border:`1px solid ${on?item.color+'55':'rgba(255,255,255,0.08)'}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:17, boxShadow:on?`0 0 10px ${item.color}44`:'none', transition:'all 0.18s ease' }}>
+              <span style={{ display:'inline-block', animation: on ? 'emojiFloat 2s ease-in-out infinite' : 'none' }}>{item.emoji}</span>
+            </div>
+              <div>
+                <div style={{ fontSize:13, fontWeight:600, color:on?item.color:'#b0b8c8', lineHeight:1.35 }}>{item.label}</div>
+                <div style={{ fontSize:10, color:C.dim, fontFamily:'JetBrains Mono,monospace', lineHeight:1.2 }}>{item.sub}</div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ padding:'12px 16px', borderTop:'1px solid rgba(255,255,255,0.05)', marginTop:8 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <div className="pulse" style={{ width:7, height:7, borderRadius:'50%', background:C.green, boxShadow:`0 0 8px ${C.green}` }}></div>
+          <span style={{ fontSize:9, fontFamily:'JetBrains Mono,monospace', color:C.dim, letterSpacing:'0.14em' }}>ALL SYSTEMS LIVE</span>
+        </div>
+      </div>
+    </nav>
+  );
+}
+
+/* ── DecisionQueue ─────────────────────────────────────────── */
+function DecisionQueue() {
+  const { decisionQueue: liveQueue } = useTeamData();
+  const [overrides, setOverrides] = useState({});
+  const queue = liveQueue.map(t => overrides[t.id] ? {...t, status: overrides[t.id]} : t);
+  const pending = queue.filter(t => t.status === 'pending').length;
+  const handle = (id, status) => {
+    const task = queue.find(t => t.id === id);
+    setOverrides(o => ({...o, [id]: status}));
+    if (task) {
+      const catMap = { 'Tsuki':'tsuki', 'Magrace':'magrace', 'Poduch':'poduch', 'Opal':'opal', 'GM':'gm' };
+      const catId = catMap[task.from] || 'tsuki';
+      const icon = status === 'approved' ? '✓' : '✕';
+      window.dispatchEvent(new CustomEvent('zentara:notify', { detail: {
+        catId,
+        msg: `${icon} ${status === 'approved' ? 'Approved' : 'Rejected'}: "${task.title}"`
+      }}));
+      window.zentaraUpdateTaskStatus(id, status).catch(() => {});
+    }
+  };
+  return (
+    <Card title="GM Decision Queue" accent={C.green} badge={`${pending} pending`}>
+      <div style={{ display:'flex', flexDirection:'column', gap:7 }}>
+        {queue.map(task => (
+          <div key={task.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 12px', borderRadius:8, border:'1px solid rgba(255,255,255,0.06)', background:task.status==='approved'?`${C.green}09`:task.status==='rejected'?`${C.red}09`:'rgba(255,255,255,0.02)', opacity:task.status!=='pending'?0.52:1, transition:'all 0.22s' }}>
+            {task.urgency === 'urgent' && task.status === 'pending' && (
+              <div className="blink" style={{ width:5, height:5, borderRadius:'50%', background:C.red, flexShrink:0, boxShadow:`0 0 6px ${C.red}` }}></div>
+            )}
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:12, fontWeight:600, color:'#cdd5df', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{task.title}</div>
+              <div style={{ fontSize:10, color:C.dim, fontFamily:'JetBrains Mono,monospace' }}>from {task.from} · {task.time}</div>
+            </div>
+            {task.status === 'pending' ? (
+              <div style={{ display:'flex', gap:5, flexShrink:0 }}>
+                <button onClick={() => handle(task.id,'approved')} style={{ padding:'3px 11px', borderRadius:5, fontSize:10, fontFamily:'JetBrains Mono,monospace', fontWeight:700, background:`${C.green}20`, border:`1px solid ${C.green}55`, color:C.green, cursor:'pointer' }}>✓</button>
+                <button onClick={() => handle(task.id,'rejected')} style={{ padding:'3px 11px', borderRadius:5, fontSize:10, fontFamily:'JetBrains Mono,monospace', fontWeight:700, background:`${C.red}20`, border:`1px solid ${C.red}55`, color:C.red, cursor:'pointer' }}>✕</button>
+              </div>
+            ) : (
+              <Badge label={task.status} color={task.status==='approved'?C.green:C.red} />
+            )}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+/* ── ActivityFeed ──────────────────────────────────────────── */
+function ActivityFeed() {
+  const { activityFeed } = useTeamData();
+  return (
+    <Card title="Live Activity" accent={C.green} badge="real-time">
+      <div style={{ display:'flex', flexDirection:'column' }}>
+        {activityFeed.map((item, i) => (
+          <div key={item.id} style={{ display:'flex', alignItems:'flex-start', gap:10, padding:'8px 0', borderBottom:i < activityFeed.length-1?'1px solid rgba(255,255,255,0.04)':'none' }}>
+            <div style={{ width:7, height:7, borderRadius:'50%', background:item.color, flexShrink:0, marginTop:5, boxShadow:`0 0 6px ${item.color}` }}></div>
+            <div style={{ flex:1, minWidth:0 }}>
+              <span style={{ fontSize:12, fontWeight:600, color:item.color }}>{item.agent} </span>
+              <span style={{ fontSize:12, color:'#9ca3af', lineHeight:1.5 }}>{item.action}</span>
+            </div>
+            <span style={{ fontSize:10, color:C.dim, fontFamily:'JetBrains Mono,monospace', flexShrink:0 }}>{item.time}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+/* ── TodaySchedule ─────────────────────────────────────────── */
+function TodaySchedule() {
+  // "done" = ถึงเวลาตามตารางจริงแล้ว (เทียบกับเวลาปัจจุบันโซนกรุงเทพฯ)
+  const now = new Date().toLocaleTimeString('en-GB', { timeZone:'Asia/Bangkok', hour:'2-digit', minute:'2-digit' });
+  return (
+    <Card title="Today's Schedule" accent={C.green}>
+      <div style={{ display:'flex', flexDirection:'column', gap:7 }}>
+        {D.schedule.map((raw, i) => {
+          const s = { ...raw, done: now >= raw.time };
+          return (
+            <div key={i} style={{ display:'flex', alignItems:'center', gap:10, opacity:s.done?0.38:1 }}>
+              <span style={{ fontSize:10, fontFamily:'JetBrains Mono,monospace', color:C.dim, width:40, flexShrink:0 }}>{s.time}</span>
+              <div style={{ width:6, height:6, borderRadius:'50%', flexShrink:0, background:s.done?C.dim:s.color, boxShadow:s.done?'none':`0 0 5px ${s.color}` }}></div>
+              <span style={{ fontSize:11, fontWeight:600, color:s.done?C.dim:s.color, flexShrink:0, width:52 }}>{s.agent}</span>
+              <span style={{ fontSize:11, color:C.muted, flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.task}</span>
+              {s.done && <span style={{ fontSize:9, color:C.dim, flexShrink:0 }}>✓</span>}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+Object.assign(window, { Card, Badge, TopBar, Sidebar, DecisionQueue, ActivityFeed, TodaySchedule, useTeamData, useLiveData, LiveDataStore });
+</script>
+
+<!-- ═══════════════════════════════════════════════
+     DEPARTMENT VIEWS: GM · Tsuki · Magrace · Poduch · Opal
+     ═══════════════════════════════════════════════ -->
+<script type="text/babel">
+const { useState: useViewState, useEffect: useViewEffect, useRef: useViewRef } = React;
+const VC = window.ZC;
+const VD = window.ZD;
+
+/* ── ViewHeader ────────────────────────────────────────────── */
+function ViewHeader({ emoji, name, role, color, desc }) {
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:14, paddingBottom:16 }}>
+      <div style={{ width:44, height:44, borderRadius:11, background:`${color}18`, border:`1.5px solid ${color}55`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, boxShadow:`0 0 18px ${color}44`, flexShrink:0 }}>{emoji}</div>
+      <div>
+        <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:17, fontWeight:700, color }}>{name} <span style={{ fontWeight:400, opacity:0.72 }}>— {role}</span></div>
+        <div style={{ fontSize:11, color:VC.muted, marginTop:3 }}>{desc}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ── LiveFloor ─────────────────────────────────────────────── */
+/* ── CatPin ────────────────────────────────────────────────── */
+function CatPin({ cat, isSelected, onClick }) {
+  const PC = window.ZC;
+  return (
+    <div onClick={onClick} style={{ position:'absolute', left:`${cat.x}%`, top:`${cat.y}%`, transform:'translate(-50%,-50%)', cursor:'pointer', zIndex:20, userSelect:'none' }}>
+      <div className="cat-ping" style={{ position:'absolute', inset:-8, borderRadius:'50%', border:`2px solid ${cat.color}`, opacity:isSelected?1:0.65 }}></div>
+      <div style={{ position:'relative' }}>
+        <div style={{ width:13, height:13, borderRadius:'50%', background:cat.color, boxShadow:`0 0 16px ${cat.color}` }}></div>
+        {cat.pending > 0 && <div style={{ position:'absolute', top:-5, right:-6, minWidth:14, height:14, borderRadius:7, background:PC.red, fontSize:8, fontFamily:'JetBrains Mono,monospace', fontWeight:700, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', padding:'0 3px', boxShadow:`0 0 8px ${PC.red}`, zIndex:5 }}>{cat.pending}</div>}
+      </div>
+      <div className="cat-idle" style={{ position:'absolute', bottom:'100%', left:'50%', transform:'translateX(-50%)', marginBottom:7, textAlign:'center', animationDuration:`${cat.floatDur}s`, pointerEvents:'none' }}>
+        <div style={{ fontSize:22, lineHeight:1 }}>{cat.emoji}</div>
+        <div style={{ fontSize:7, fontFamily:'JetBrains Mono,monospace', color:cat.color, background:'rgba(7,8,14,0.92)', padding:'1px 5px', borderRadius:3, border:`1px solid ${cat.color}45`, marginTop:2, whiteSpace:'nowrap' }}>{cat.name}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ── CatPopup ───────────────────────────────────────────────── */
+function CatPopup({ cat, onClose, onNavigate, activityFeed }) {
+  const PC = window.ZC;
+  const activity = (activityFeed||[]).filter(a => a.agent === cat.name).slice(0,2);
+  const isRight = cat.x > 50;
+  return (
+    <div style={{ position:'absolute', zIndex:30, width:'54%',
+      top: cat.y < 65 ? `${Math.min(cat.y+5,48)}%` : 'auto',
+      bottom: cat.y >= 65 ? '4%' : 'auto',
+      ...(isRight ? { right:'3%' } : { left:'3%' }),
+      background:'rgba(9,10,18,0.97)', border:`1px solid ${cat.color}45`, borderRadius:11, padding:14,
+      backdropFilter:'blur(16px)', boxShadow:`0 0 30px ${cat.color}25, 0 6px 28px rgba(0,0,0,0.75)`,
+      animation:'fadeUp 0.2s ease-out',
+    }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:11 }}>
+        <div style={{ width:38, height:38, borderRadius:9, background:`${cat.color}18`, border:`1.5px solid ${cat.color}55`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, boxShadow:`0 0 12px ${cat.color}44`, flexShrink:0 }}>{cat.emoji}</div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontFamily:'JetBrains Mono,monospace', fontWeight:700, fontSize:13, color:cat.color }}>{cat.name}</div>
+          <div style={{ fontSize:10, color:PC.muted, marginTop:1 }}>{cat.role}</div>
+        </div>
+        <button onClick={onClose} style={{ background:'none', border:'none', color:PC.muted, cursor:'pointer', fontSize:18, padding:'2px 5px', lineHeight:1 }}>×</button>
+      </div>
+      <div style={{ background:`${cat.color}0d`, border:`1px solid ${cat.color}25`, borderRadius:7, padding:'9px 11px', marginBottom:9 }}>
+        <div style={{ fontSize:8, fontFamily:'JetBrains Mono,monospace', color:`${cat.color}99`, letterSpacing:'0.14em', marginBottom:5 }}>NOW DOING</div>
+        <div style={{ fontSize:11, color:'#cdd5df', lineHeight:1.55 }}>{cat.doing}</div>
+      </div>
+      {activity.length > 0 && (
+        <div style={{ marginBottom:10 }}>
+          <div style={{ fontSize:8, fontFamily:'JetBrains Mono,monospace', color:PC.dim, letterSpacing:'0.12em', marginBottom:6 }}>RECENT</div>
+          {activity.map((a,i) => (
+            <div key={i} style={{ display:'flex', gap:7, marginBottom:4 }}>
+              <span style={{ color:cat.color, fontSize:8, marginTop:2, flexShrink:0 }}>◆</span>
+              <span style={{ fontSize:10, color:PC.sub, lineHeight:1.4 }}>{a.action} <span style={{ color:PC.dim }}>({a.time})</span></span>
+            </div>
+          ))}
+        </div>
+      )}
+      {cat.id !== 'gm' && (
+        <button onClick={() => onNavigate(cat.id)} style={{ width:'100%', padding:'7px 12px', borderRadius:6, background:`${cat.color}1a`, border:`1px solid ${cat.color}50`, color:cat.color, fontSize:10, fontFamily:'JetBrains Mono,monospace', fontWeight:700, cursor:'pointer', letterSpacing:'0.1em', textTransform:'uppercase' }}>
+          Open {cat.name} Dashboard →
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ── NotificationToast ──────────────────────────────────────── */
+function NotificationToast({ notif, onClose, onNavigate }) {
+  const PC = window.ZC;
+  const cat = notif.cat;
+  if (!cat) return null;
+  return (
+    <div style={{ position:'absolute', bottom:10, left:'50%', transform:'translateX(-50%)', width:'82%', zIndex:35, borderRadius:10, padding:'10px 12px', background:'rgba(9,10,18,0.97)', border:`1px solid ${cat.color}50`, backdropFilter:'blur(16px)', boxShadow:`0 0 24px ${cat.color}22, 0 4px 20px rgba(0,0,0,0.75)`, animation:'fadeUp 0.22s ease-out' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:9 }}>
+        <div style={{ width:30, height:30, borderRadius:7, background:`${cat.color}18`, border:`1px solid ${cat.color}55`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:17, flexShrink:0 }}>{cat.emoji}</div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:8, fontFamily:'JetBrains Mono,monospace', color:`${cat.color}88`, letterSpacing:'0.12em', marginBottom:3 }}>{cat.name.toUpperCase()} · UPDATE</div>
+          <div style={{ fontSize:11, color:'#cdd5df', lineHeight:1.4 }}>{notif.msg}</div>
+        </div>
+        <button onClick={onClose} style={{ background:'none', border:'none', color:PC.dim, cursor:'pointer', fontSize:16, padding:'0 4px', lineHeight:1, flexShrink:0 }}>×</button>
+      </div>
+      {cat.id !== 'gm' && (
+        <button onClick={() => onNavigate(cat.id)} style={{ width:'100%', marginTop:8, padding:'5px', borderRadius:5, background:`${cat.color}15`, border:`1px solid ${cat.color}40`, color:cat.color, fontSize:9, fontFamily:'JetBrains Mono,monospace', fontWeight:700, cursor:'pointer', letterSpacing:'0.1em', textTransform:'uppercase' }}>Open {cat.name} →</button>
+      )}
+      <div style={{ marginTop:7, height:2, background:'rgba(255,255,255,0.07)', borderRadius:1, overflow:'hidden' }}>
+        <div style={{ height:'100%', background:cat.color, borderRadius:1, animation:'drainBar 4.5s linear forwards' }}></div>
+      </div>
+    </div>
+  );
+}
+
+/* ── HQImage ────────────────────────────────────────────────── */
+function HQImage({ onNavigate }) {
+  const [selected, setSelected] = useViewState(null);
+  const [notification, setNotification] = useViewState(null);
+  const HC = window.ZC;
+  const selectedRef = useViewRef(null);
+  useViewEffect(() => { selectedRef.current = selected; }, [selected]);
+
+  const { decisionQueue, activityFeed, latestByAgent } = window.useTeamData();
+  const { tsukiInbox } = window.useLiveData();
+  const NO_UPDATE = 'ยังไม่มีอัปเดตจาก team_tasks';
+  const doingFor = (agentId) => {
+    const latest = latestByAgent[agentId];
+    return latest ? `${latest.title} (${latest.time})` : NO_UPDATE;
+  };
+
+  const cats = [
+    { id:'gm',      emoji:'👑', name:'GM',      role:'ผู้บริหาร',      color:HC.green,  x:62, y:20, floatDur:2.8, pending:decisionQueue.length, doing: decisionQueue.length > 0 ? `มี ${decisionQueue.length} รายการรอการตัดสินใจ` : 'ไม่มีรายการรอการตัดสินใจ' },
+    { id:'tsuki',   emoji:'🐱', name:'Tsuki',   role:'Chief of Staff', color:HC.pink,   x:47, y:45, floatDur:2.4, pending:tsukiInbox.length, doing: doingFor('tsuki') },
+    { id:'magrace', emoji:'🎨', name:'Magrace', role:'Marketing',      color:HC.purple, x:20, y:53, floatDur:3.1, pending:0, doing: doingFor('magrace') },
+    { id:'poduch',  emoji:'🧵', name:'Poduch',  role:'Product',        color:HC.blue,   x:77, y:55, floatDur:2.6, pending:0, doing: doingFor('poduch') },
+    { id:'opal',    emoji:'📦', name:'Opal',    role:'Operations',     color:HC.orange, x:40, y:80, floatDur:2.2, pending:0, doing: doingFor('opal') },
+  ];
+  useViewEffect(() => {
+    let dismissTimer;
+    const handler = (e) => {
+      if (selectedRef.current) return;
+      const { catId, msg } = e.detail;
+      const cat = cats.find(c => c.id === catId);
+      if (!cat) return;
+      setNotification({ msg, cat });
+      clearTimeout(dismissTimer);
+      dismissTimer = setTimeout(() => setNotification(null), 4500);
+    };
+    window.addEventListener('zentara:notify', handler);
+    return () => { window.removeEventListener('zentara:notify', handler); clearTimeout(dismissTimer); };
+  }, []);
+
+  const handleSelect = (cat) => { setNotification(null); setSelected(prev => prev?.id === cat.id ? null : cat); };
+  return (
+    <div style={{ position:'relative', aspectRatio:'1/1', background:'#08090f', border:`1px solid ${HC.green}22`, borderRadius:12, overflow:'hidden', boxShadow:`0 0 40px ${HC.green}0e` }}>
+      <img src="uploads/zentara-hq.png" alt="ZENTARA HQ" style={{ width:'100%', height:'100%', objectFit:'contain', imageRendering:'pixelated', display:'block' }} onError={e => { e.target.style.display='none'; }} />
+      {cats.map(cat => <CatPin key={cat.id} cat={cat} isSelected={selected?.id === cat.id} onClick={() => handleSelect(cat)} />)}
+      {selected && <CatPopup cat={selected} activityFeed={activityFeed} onClose={() => setSelected(null)} onNavigate={(id) => { if(onNavigate) onNavigate(id); setSelected(null); }} />}
+      {notification && !selected && <NotificationToast notif={notification} onClose={() => setNotification(null)} onNavigate={(id) => { if(onNavigate) onNavigate(id); setNotification(null); }} />}
+      <div style={{ position:'absolute', top:10, left:10, background:'rgba(8,9,16,0.88)', border:`1px solid ${HC.green}35`, borderRadius:5, padding:'3px 10px' }}>
+        <span style={{ fontSize:9, fontFamily:'JetBrains Mono,monospace', color:HC.green, letterSpacing:'0.1em' }}>ZENTARA HQ</span>
+      </div>
+      <div style={{ position:'absolute', top:10, right:10, display:'flex', alignItems:'center', gap:5, background:'rgba(8,9,16,0.88)', border:`1px solid ${HC.green}35`, borderRadius:5, padding:'3px 10px' }}>
+        <div className="pulse" style={{ width:5, height:5, borderRadius:'50%', background:HC.green, boxShadow:`0 0 6px ${HC.green}` }}></div>
+        <span style={{ fontSize:9, fontFamily:'JetBrains Mono,monospace', color:HC.green, letterSpacing:'0.1em' }}>LIVE</span>
+      </div>
+      {!selected && !notification && (
+        <div style={{ position:'absolute', bottom:8, left:'50%', transform:'translateX(-50%)', background:'rgba(7,8,14,0.85)', border:'1px solid rgba(255,255,255,0.1)', borderRadius:20, padding:'3px 14px' }}>
+          <span style={{ fontSize:8, fontFamily:'JetBrains Mono,monospace', color:HC.muted, letterSpacing:'0.06em', whiteSpace:'nowrap' }}>click a cat · see what they’re doing</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LiveFloor() {
+  const FC = window.ZC;
+  const [cats, setCats] = useViewState([
+    { id:'gm',      emoji:'👑', name:'GM',      color:FC.green,  x:4,  min:2,  max:15, spd:0.12, dir:1  },
+    { id:'tsuki',   emoji:'🐱', name:'Tsuki',   color:FC.pink,   x:22, min:18, max:34, spd:0.15, dir:1  },
+    { id:'magrace', emoji:'🎨', name:'Magrace', color:FC.purple, x:40, min:37, max:57, spd:0.13, dir:1  },
+    { id:'poduch',  emoji:'🧵', name:'Poduch',  color:FC.blue,   x:64, min:60, max:78, spd:0.16, dir:-1 },
+    { id:'opal',    emoji:'📦', name:'Opal',    color:FC.orange, x:84, min:80, max:97, spd:0.14, dir:1  },
+  ]);
+
+
+  const zones = [
+    { label:'GM OFFICE', color:FC.green,  pos:8.5 },
+    { label:'RECEPTION', color:FC.pink,   pos:26  },
+    { label:'STUDIO',    color:FC.purple, pos:47  },
+    { label:'WORKSHOP',  color:FC.blue,   pos:69  },
+    { label:'WAREHOUSE', color:FC.orange, pos:88.5},
+  ];
+
+  return (
+    <div style={{ background:'#07080e', border:`1px solid ${FC.green}1c`, borderRadius:11, overflow:'hidden', position:'relative', height:84, flexShrink:0 }}>
+      <div style={{ position:'absolute', top:8, left:14, fontSize:9, fontFamily:'JetBrains Mono,monospace', color:FC.dim, letterSpacing:'0.18em' }}>LIVE OFFICE FLOOR</div>
+      {/* Zone dividers */}
+      {[16.5, 36.5, 59, 79.5].map(p => (
+        <div key={p} style={{ position:'absolute', top:22, bottom:18, left:`${p}%`, width:1, background:`${FC.green}14` }}></div>
+      ))}
+      {/* Floor line */}
+      <div style={{ position:'absolute', bottom:22, left:14, right:14, height:1, background:`linear-gradient(90deg, transparent, ${FC.green}30 15%, ${FC.green}30 85%, transparent)` }}></div>
+      {/* Zone labels */}
+      {zones.map(z => (
+        <div key={z.label} style={{ position:'absolute', bottom:8, left:`${z.pos}%`, transform:'translateX(-50%)', fontSize:7, fontFamily:'JetBrains Mono,monospace', color:`${z.color}50`, letterSpacing:'0.08em', whiteSpace:'nowrap' }}>{z.label}</div>
+      ))}
+      {/* Walking cats */}
+      {cats.map(cat => (
+        <div key={cat.id} style={{ position:'absolute', bottom:23, left:`${cat.x}%`, transform:`translateX(-50%) scaleX(${cat.dir})`, transformOrigin:'center bottom', userSelect:'none', width:30, textAlign:'center' }}>
+          <span className="cat-walk" style={{ fontSize:20 }}>{cat.emoji}</span>
+          <div style={{ fontSize:7, fontFamily:'JetBrains Mono,monospace', color:cat.color, transform:`scaleX(${cat.dir})`, lineHeight:1.3, marginTop:1 }}>{cat.name}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── GMOverview ────────────────────────────────────────────── */
+function GMOverview({ onNavigate }) {
+  const { stats, stockAlerts, dmInbox } = window.useLiveData();
+  const { decisionQueue } = window.useTeamData();
+  const ordersToday = stats ? stats.today_orders : VD.kpis.ordersToday;
+  const pendingDMs  = dmInbox.filter(d => d.status === 'pending').length;
+  const pendingApprovals = decisionQueue.filter(t => t.status === 'pending').length;
+  const kpis = [
+    { label:'Orders Today',  value:ordersToday,           sub:stats ? 'live from orders' : `${VD.kpis.ordersTrend} vs yesterday`, color:VC.green,  icon:'📦' },
+    { label:'Low Stock',     value:stockAlerts.length,     sub:'items below threshold',                color:VC.orange, icon:'⚠'  },
+    { label:'Pending DMs',   value:pendingDMs,             sub:'unanswered inquiries',                 color:VC.pink,   icon:'💬' },
+    { label:'GM Queue',      value:pendingApprovals,       sub:'awaiting decision',                    color:VC.purple, icon:'⏳' },
+  ];
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+      {/* KPI Row */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
+        {kpis.map(k => (
+          <div key={k.label} style={{ background:`${k.color}0b`, border:`1px solid ${k.color}30`, borderRadius:11, padding:'15px 17px', boxShadow:`0 0 22px ${k.color}0e` }}>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:9 }}>
+              <span style={{ fontSize:9, fontFamily:'JetBrains Mono,monospace', color:VC.muted, letterSpacing:'0.13em', textTransform:'uppercase' }}>{k.label}</span>
+              <span style={{ fontSize:17 }}>{k.icon}</span>
+            </div>
+            <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:34, fontWeight:700, color:k.color, textShadow:`0 0 18px ${k.color}77`, lineHeight:1 }}>{k.value}</div>
+            <div style={{ fontSize:10, color:VC.dim, marginTop:7 }}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <LiveFloor />
+
+      {/* 2-column layout */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
+        {/* Left: Pixel Art + Schedule */}
+        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+          <HQImage onNavigate={onNavigate} />
+          <window.TodaySchedule />
+        </div>
+
+        {/* Right: Decision Queue + Activity */}
+        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+          <window.DecisionQueue />
+          <window.ActivityFeed />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── TsukiView ─────────────────────────────────────────────── */
+function TsukiView() {
+  const sColor = { pending:VC.orange, in_progress:VC.gold, approved:VC.green, rejected:VC.red, done:VC.muted };
+  const { tsukiInbox } = window.useLiveData();
+  const { latestByAgent } = window.useTeamData();
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+      <ViewHeader emoji="🐱" name="Tsuki" role="Chief of Staff" color={VC.pink} desc="Inbox · Brand Guardian · Approval Queue · Decision Relay" />
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
+        <window.Card title="Inbox" accent={VC.pink} badge={`${tsukiInbox.length} active`}>
+          <div style={{ display:'flex', flexDirection:'column', gap:7 }}>
+            {tsukiInbox.map(item => (
+              <div key={item.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 12px', borderRadius:8, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)' }}>
+                {item.urgency==='urgent' && <div className="blink" style={{ width:5, height:5, borderRadius:'50%', background:VC.red, flexShrink:0, boxShadow:`0 0 5px ${VC.red}` }}></div>}
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:12, fontWeight:600, color:'#cdd5df', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{item.title}</div>
+                  <div style={{ fontSize:10, color:VC.dim, fontFamily:'JetBrains Mono,monospace' }}>from {item.from}</div>
+                </div>
+                <window.Badge label={item.status.replace(/_/g,' ')} color={sColor[item.status]||VC.muted} />
+              </div>
+            ))}
+          </div>
+        </window.Card>
+        <window.DecisionQueue />
+      </div>
+      <window.Card title="Team Status" accent={VC.pink}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12 }}>
+          {[
+            { id:'magrace', name:'Magrace', color:VC.purple, emoji:'🎨' },
+            { id:'opal',    name:'Opal',    color:VC.orange, emoji:'📦' },
+            { id:'poduch',  name:'Poduch',  color:VC.blue,   emoji:'🧵' },
+          ].map(m => {
+            const latest = latestByAgent[m.id];
+            return (
+              <div key={m.name} style={{ padding:14, borderRadius:10, background:`${m.color}0a`, border:`1px solid ${m.color}22` }}>
+                <div style={{ fontSize:24, marginBottom:9 }}>{m.emoji}</div>
+                <div style={{ fontSize:13, fontWeight:700, color:m.color, marginBottom:5 }}>{m.name}</div>
+                <div style={{ fontSize:11, color:VC.muted, lineHeight:1.55 }}>{latest ? latest.title : 'ยังไม่มีอัปเดตจาก team_tasks'}</div>
+                <div style={{ display:'flex', alignItems:'center', gap:5, marginTop:10 }}>
+                  <div className={latest ? 'pulse' : ''} style={{ width:5, height:5, borderRadius:'50%', background:latest ? m.color : VC.dim, boxShadow:latest ? `0 0 5px ${m.color}` : 'none' }}></div>
+                  <span style={{ fontSize:9, fontFamily:'JetBrains Mono,monospace', color:latest ? m.color : VC.dim, letterSpacing:'0.1em' }}>{latest ? `ล่าสุด ${latest.time}` : 'NO DATA'}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </window.Card>
+    </div>
+  );
+}
+
+/* ── MagraceView ───────────────────────────────────────────── */
+function MagraceView() {
+  const [tab, setTab] = useViewState('report');
+  const [latestReport, setLatestReport] = useViewState(undefined);
+  const { performance } = window.useLiveData();
+  useViewEffect(() => {
+    window.zentaraFetchMagraceLatestReport().then(setLatestReport).catch(() => setLatestReport(null));
+  }, []);
+  const perfStats = [
+    { label:'IG Followers',  value:performance.igFollowers,  color:VC.purple },
+    { label:'IG Reach (avg)', value:performance.igReach,      color:VC.purple },
+    { label:'Engagement',    value:performance.igEngagement, color:VC.green  },
+    { label:'TikTok Views',  value:performance.ttViews,      color:VC.blue   },
+  ];
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+      <ViewHeader emoji="🎨" name="Magrace" role="Marketing Manager" color={VC.purple} desc="Content · Campaign · Performance · Market Intelligence" />
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
+        {perfStats.map(k => (
+          <div key={k.label} style={{ background:`${k.color}0b`, border:`1px solid ${k.color}30`, borderRadius:11, padding:'15px 17px' }}>
+            <div style={{ fontSize:9, fontFamily:'JetBrains Mono,monospace', color:VC.muted, letterSpacing:'0.13em', textTransform:'uppercase', marginBottom:9 }}>{k.label}</div>
+            <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:28, fontWeight:700, color:k.color, textShadow:`0 0 14px ${k.color}66` }}>{k.value}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display:'flex', gap:0, borderBottom:'1px solid rgba(255,255,255,0.07)' }}>
+        {['report','campaigns'].map(t => (
+          <button key={t} onClick={() => setTab(t)} style={{ padding:'8px 18px', background:'none', border:'none', borderBottom:`2px solid ${tab===t?VC.purple:'transparent'}`, color:tab===t?VC.purple:VC.muted, fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'JetBrains Mono,monospace', letterSpacing:'0.1em', textTransform:'uppercase', transition:'color 0.15s' }}>{t}</button>
+        ))}
+      </div>
+      {tab === 'report' && (
+        latestReport === undefined ? (
+          <window.Card title="Latest Report" accent={VC.purple}>
+            <div style={{ fontSize:12, color:VC.muted }}>กำลังโหลด...</div>
+          </window.Card>
+        ) : latestReport === null ? (
+          <window.Card title="Latest Report" accent={VC.purple}>
+            <div style={{ fontSize:12, color:VC.muted }}>ยังไม่มีรายงานจาก Magrace ใน team_tasks</div>
+          </window.Card>
+        ) : (
+          <window.Card title={latestReport.title} accent={VC.purple} badge={latestReport.time}>
+            <div style={{ fontSize:12, color:'#cdd5df', lineHeight:1.7, whiteSpace:'pre-wrap', maxHeight:420, overflowY:'auto' }}>{latestReport.text}</div>
+          </window.Card>
+        )
+      )}
+      {tab === 'campaigns' && (
+        <window.Card title="Campaign Pipeline" accent={VC.purple}>
+          <div style={{ fontSize:12, color:VC.muted, padding:'8px 0' }}>
+            ยังไม่มีข้อมูลแคมเปญใน team_tasks — รอ Magrace ส่งข้อมูลแคมเปญเข้าระบบ
+          </div>
+        </window.Card>
+      )}
+    </div>
+  );
+}
+
+/* ── PoduchView ────────────────────────────────────────────── */
+function PoduchView() {
+  const { stockAlerts, collections } = window.useLiveData();
+  const collColor = { live:VC.green, ready:VC.green, QC:VC.orange, production:VC.orange, planning:VC.muted, paused:VC.red };
+  const inProgress = collections.filter(c => c.status === 'production' || c.status === 'QC');
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+      <ViewHeader emoji="🧵" name="Poduch" role="Product Manager" color={VC.blue} desc="Collections · Stock · QC · Production Briefs · Costing" />
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
+        <window.Card title="Collection Status" accent={VC.blue}>
+          <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
+            {collections.map(col => {
+              const sc = collColor[col.status] || VC.muted;
+              return (
+                <div key={col.name}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+                    <span style={{ fontSize:13, fontWeight:700, color:'#cdd5df' }}>{col.name}</span>
+                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <span style={{ fontSize:10, color:VC.dim, fontFamily:'JetBrains Mono,monospace' }}>{col.target}</span>
+                      <window.Badge label={col.status} color={sc} />
+                    </div>
+                  </div>
+                  <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                    <div style={{ flex:1, height:5, background:'rgba(255,255,255,0.07)', borderRadius:3, overflow:'hidden' }}>
+                      <div style={{ width:`${col.progress}%`, height:'100%', background:VC.blue, borderRadius:3, boxShadow:`0 0 8px ${VC.blue}88`, transition:'width 0.6s ease' }}></div>
+                    </div>
+                    <span style={{ fontSize:11, fontFamily:'JetBrains Mono,monospace', fontWeight:700, color:VC.blue, width:34, textAlign:'right' }}>{col.progress}%</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </window.Card>
+        <window.Card title="⚠ Stock Alerts" accent={VC.orange} badge={`${stockAlerts.length} items`}>
+          <div style={{ display:'flex', flexDirection:'column', gap:9 }}>
+            {stockAlerts.map((s, i) => (
+              <div key={i} style={{ padding:'12px 14px', borderRadius:9, background:`${VC.orange}0c`, border:`1px solid ${VC.orange}28`, display:'flex', alignItems:'center', gap:12 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:12, fontWeight:600, color:'#cdd5df' }}>{s.item}</div>
+                  <div style={{ fontSize:10, color:VC.dim, fontFamily:'JetBrains Mono,monospace', marginTop:2 }}>Size {s.size} · Min: {s.min}</div>
+                </div>
+                <div style={{ textAlign:'right' }}>
+                  <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:26, fontWeight:700, color:VC.orange, textShadow:`0 0 12px ${VC.orange}88`, lineHeight:1 }}>{s.qty}</div>
+                  <div style={{ fontSize:9, color:VC.dim, marginTop:3 }}>in stock</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </window.Card>
+      </div>
+      <window.Card title="Production / QC Status" accent={VC.blue}>
+        {inProgress.length === 0 ? (
+          <div style={{ fontSize:12, color:VC.muted, padding:'8px 0' }}>
+            ไม่มีคอลเลกชันที่อยู่ระหว่างการผลิตหรือ QC ขณะนี้ (ทุกคอลเลกชันเป็น live/shipped หรือ planning)
+          </div>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {inProgress.map(col => (
+              <div key={col.name} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 13px', borderRadius:9, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.06)' }}>
+                <span style={{ fontSize:13, fontWeight:600, color:'#cdd5df' }}>{col.name}</span>
+                <window.Badge label={col.status} color={collColor[col.status] || VC.muted} />
+              </div>
+            ))}
+          </div>
+        )}
+      </window.Card>
+    </div>
+  );
+}
+
+/* ── OpalView ──────────────────────────────────────────────── */
+function OpalView() {
+  const oStat  = { packed:VC.green, processing:VC.orange, shipped:VC.blue, issue:VC.red };
+  const dmStat = { replied:VC.green, pending:VC.orange };
+  const { orders, ordersSummary, dmInbox } = window.useLiveData();
+  const summary = ordersSummary || { ordersToday:0, shipped:0, processing:0, issues:0 };
+  const opalKpis = [
+    { label:'Orders Today', value:summary.ordersToday, color:VC.orange },
+    { label:'Shipped',      value:summary.shipped,     color:VC.green  },
+    { label:'Processing',   value:summary.processing,  color:VC.orange },
+    { label:'Issues',       value:summary.issues,      color:VC.red    },
+  ];
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+      <ViewHeader emoji="📦" name="Opal" role="Operations Manager" color={VC.orange} desc="Orders · DM Inbox · Pre-order · Returns · Shipping SOP" />
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
+        {opalKpis.map(k => (
+          <div key={k.label} style={{ background:`${k.color}0b`, border:`1px solid ${k.color}30`, borderRadius:11, padding:'15px 17px', textAlign:'center' }}>
+            <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:32, fontWeight:700, color:k.color, textShadow:`0 0 16px ${k.color}77` }}>{k.value}</div>
+            <div style={{ fontSize:10, color:VC.muted, marginTop:7 }}>{k.label}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
+        <window.Card title="Order Tracker" accent={VC.orange} badge="today">
+          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+            {orders.map(o => (
+              <div key={o.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 10px', borderRadius:6, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)' }}>
+                <span style={{ fontFamily:'JetBrains Mono,monospace', fontSize:10, color:VC.orange, width:44, flexShrink:0 }}>{o.id}</span>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:12, fontWeight:600, color:'#cdd5df' }}>{o.customer}</div>
+                  <div style={{ fontSize:10, color:VC.muted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{o.item}</div>
+                </div>
+                <span style={{ fontSize:10, color:VC.dim, fontFamily:'JetBrains Mono,monospace', flexShrink:0 }}>{o.time}</span>
+                <window.Badge label={o.status} color={oStat[o.status]} />
+              </div>
+            ))}
+          </div>
+        </window.Card>
+        <window.Card title="DM Inbox" accent={VC.orange} badge={`${dmInbox.filter(d=>d.status==='pending').length} pending`}>
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {dmInbox.map(dm => (
+              <div key={dm.id} style={{ padding:'10px 13px', borderRadius:8, background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.05)' }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:5 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:7 }}>
+                    <span style={{ fontSize:9, fontFamily:'JetBrains Mono,monospace', color:VC.muted, background:'rgba(255,255,255,0.07)', borderRadius:3, padding:'1px 6px' }}>{dm.platform}</span>
+                    <span style={{ fontSize:12, fontWeight:600, color:'#cdd5df' }}>{dm.user}</span>
+                  </div>
+                  <div style={{ display:'flex', alignItems:'center', gap:7 }}>
+                    <span style={{ fontSize:9, color:VC.dim, fontFamily:'JetBrains Mono,monospace' }}>{dm.time}</span>
+                    <window.Badge label={dm.status} color={dmStat[dm.status]} />
+                  </div>
+                </div>
+                <div style={{ fontSize:11, color:'#9ca3af', lineHeight:1.55 }}>{dm.msg}</div>
+              </div>
+            ))}
+          </div>
+        </window.Card>
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, { GMOverview, TsukiView, MagraceView, PoduchView, OpalView });
+</script>
+
+<!-- ═══════════════════════════════════════════════
+     APP ROOT
+     ═══════════════════════════════════════════════ -->
+<script type="text/babel">
+const { useState: useAppState, useEffect: useAppEffect } = React;
+const AC = window.ZC;
+
+/* ── LoginScreen ───────────────────────────────────────────── */
+function LoginScreen({ onSuccess }) {
+  const [email, setEmail] = useAppState('');
+  const [password, setPassword] = useAppState('');
+  const [error, setError] = useAppState('');
+  const [loading, setLoading] = useAppState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      await window.zentaraLogin(email, password);
+      onSuccess();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const inputStyle = {
+    width:'100%', padding:'10px 12px', borderRadius:8, background:'rgba(255,255,255,0.03)',
+    border:'1px solid rgba(255,255,255,0.1)', color:AC.text, fontSize:13, fontFamily:'inherit', outline:'none',
+  };
+
+  return (
+    <div style={{ height:'100vh', width:'100%', display:'flex', alignItems:'center', justifyContent:'center', background:AC.bg }}>
+      <form onSubmit={submit} style={{ width:340, background:AC.card, border:`1px solid ${AC.green}30`, borderRadius:14, padding:28, boxShadow:`0 0 40px ${AC.green}10` }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:22 }}>
+          <div style={{ width:34, height:34, borderRadius:8, background:`${AC.green}18`, border:`1.5px solid ${AC.green}80`, display:'flex', alignItems:'center', justifyContent:'center', boxShadow:`0 0 14px ${AC.green}44` }}>
+            <svg width="16" height="16" viewBox="0 0 14 14" fill="none">
+              <polygon points="7,1 13,4.5 13,9.5 7,13 1,9.5 1,4.5" stroke={AC.green} strokeWidth="1.5" fill="none"/>
+              <polygon points="7,4.5 10,6.2 10,8.2 7,9.8 4,8.2 4,6.2" fill={AC.green} opacity="0.8"/>
+            </svg>
+          </div>
+          <div>
+            <div style={{ fontFamily:'JetBrains Mono,monospace', fontWeight:700, fontSize:14, letterSpacing:'0.12em', color:AC.text }}>ZENTARA</div>
+            <div style={{ fontFamily:'JetBrains Mono,monospace', fontSize:9, color:AC.muted, letterSpacing:'0.14em' }}>COMMAND CENTER</div>
+          </div>
+        </div>
+        <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+          <div>
+            <label style={{ display:'block', fontSize:10, fontFamily:'JetBrains Mono,monospace', color:AC.muted, letterSpacing:'0.1em', marginBottom:6 }}>EMAIL</label>
+            <input type="email" required value={email} onChange={e=>setEmail(e.target.value)} style={inputStyle} placeholder="admin@zentara.com" />
+          </div>
+          <div>
+            <label style={{ display:'block', fontSize:10, fontFamily:'JetBrains Mono,monospace', color:AC.muted, letterSpacing:'0.1em', marginBottom:6 }}>PASSWORD</label>
+            <input type="password" required value={password} onChange={e=>setPassword(e.target.value)} style={inputStyle} placeholder="••••••••" />
+          </div>
+          {error && <div style={{ fontSize:11, color:AC.red, lineHeight:1.5 }}>{error}</div>}
+          <button type="submit" disabled={loading} style={{ marginTop:6, padding:'11px', borderRadius:8, background:`${AC.green}18`, border:`1.5px solid ${AC.green}80`, color:AC.green, fontWeight:700, fontSize:12, fontFamily:'JetBrains Mono,monospace', letterSpacing:'0.1em', cursor:loading?'default':'pointer', opacity:loading?0.6:1, boxShadow:`0 0 14px ${AC.green}33` }}>
+            {loading ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ'}
+          </button>
+        </div>
+        <div style={{ marginTop:16, fontSize:10, color:AC.dim, textAlign:'center', lineHeight:1.6 }}>
+          ใช้บัญชีผู้ดูแลระบบ (admin) เดียวกับหน้า Admin ของ ZENTARA
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function App() {
+  const [view, setView] = useAppState('gm');
+  const [auth, setAuth] = useAppState(() => window.zentaraGetAuth());
+  const { decisionQueue } = window.useTeamData();
+  const urgentCount = decisionQueue.filter(t => t.urgency === 'urgent' && t.status === 'pending').length;
+
+  useAppEffect(() => {
+    const handler = () => setAuth(window.zentaraGetAuth());
+    window.addEventListener('zentara:auth-changed', handler);
+    return () => window.removeEventListener('zentara:auth-changed', handler);
+  }, []);
+
+  if (!auth) {
+    return <LoginScreen onSuccess={() => { setAuth(window.zentaraGetAuth()); window.LiveDataStore.refresh(); }} />;
+  }
+
+  const viewMap = {
+    gm:      window.GMOverview,
+    tsuki:   window.TsukiView,
+    magrace: window.MagraceView,
+    poduch:  window.PoduchView,
+    opal:    window.OpalView,
+  };
+  const View = viewMap[view] || window.GMOverview;
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', height:'100vh', overflow:'hidden', background:'#0a0a12' }}>
+      <window.TopBar urgentCount={urgentCount} user={auth.user} onLogout={() => window.zentaraLogout()} />
+      <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
+        <window.Sidebar activeView={view} onNavigate={setView} />
+        <main style={{ flex:1, overflow:'auto', padding:'18px 22px' }}>
+          <div key={view} className="view-in">
+            <View onNavigate={setView} />
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
