@@ -5,6 +5,9 @@ const rateLimit = require('express-rate-limit');
 
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, message: { error: 'Request มากเกินไป กรุณารอสักครู่' } });
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: { error: 'พยายาม login/register มากเกินไป กรุณารอ 15 นาที' } });
+// dashboard ศูนย์บัญชาการ poll /api/team + /api/instagram ทุก 12-15s ต่อเนื่อง
+// ต้องการ limit ที่สูงกว่ามาก เพื่อไม่ให้ live data ค้าง/error ระหว่างเปิดหน้าทิ้งไว้
+const dashboardLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 1000, message: { error: 'Request มากเกินไป กรุณารอสักครู่' } });
 
 const authRoutes     = require('./routes/auth');
 const productRoutes  = require('./routes/products');
@@ -14,6 +17,7 @@ const reviewRoutes   = require('./routes/reviews');
 const adminRoutes       = require('./routes/admin');
 const instagramRoutes   = require('./routes/instagram');
 const teamRoutes        = require('./routes/team');
+const tiktokRoutes      = require('./routes/tiktok');
 
 const app  = express();
 const PORT = process.env.PORT || 5000;
@@ -22,6 +26,7 @@ const allowedOrigins = [
   process.env.FRONTEND_URL,
   'http://localhost:3000',
   'http://localhost:5173',
+  'http://localhost:4321',
 ].filter(Boolean);
 
 app.use(cors({
@@ -44,8 +49,9 @@ app.use('/api/orders',    orderRoutes);
 app.use('/api/discounts', discountRoutes);
 app.use('/api/reviews',   reviewRoutes);
 app.use('/api/admin',     adminRoutes);
-app.use('/api/instagram', limiter, instagramRoutes);
-app.use('/api/team',      limiter, teamRoutes);
+app.use('/api/instagram', dashboardLimiter, instagramRoutes);
+app.use('/api/team',      dashboardLimiter, teamRoutes);
+app.use('/api/tiktok',    dashboardLimiter, tiktokRoutes);
 
 app.get('/api/health', (_, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 

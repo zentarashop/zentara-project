@@ -154,6 +154,21 @@ router.get('/summary', async (req, res) => {
   }
 });
 
+// GET /api/team/collections — รายการคอลเลกชันทั้งหมด (สำหรับ Poduch)
+router.get('/collections', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('collections')
+      .select('*')
+      .order('updated_at', { ascending: false });
+
+    if (error) throw new Error(error.message);
+    res.json({ data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/team/notify-gm — Tsuki ส่ง email สรุปให้ GM
 router.post('/notify-gm', async (req, res) => {
   try {
